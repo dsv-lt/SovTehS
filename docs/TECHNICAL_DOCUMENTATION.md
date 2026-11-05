@@ -282,7 +282,7 @@ sequenceDiagram
 ### 9.1. Локальный запуск (Windows PowerShell / Linux)
 
 ```powershell
-cd literary-style-assistant
+cd SovTehS
 .venv\Scripts\uvicorn.exe src.app:app --host 0.0.0.0 --port 8000
 ```
 
@@ -326,4 +326,5 @@ docker run --rm -p 8000:8000 -e LLM_API_KEY="your_api_key_here" doc-assistant
 # Статический анализ и проверка соответствия PEP8
 uv tool run ruff check src tests --line-length 100
 ```
+
 

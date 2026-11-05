@@ -101,7 +101,7 @@ flowchart LR
 Откройте терминал **PowerShell** и перейдите в папку проекта:
 
 ```powershell
-cd literary-style-assistant
+cd SovTehS
 ```
 
 Создайте виртуальное окружение и установите библиотеки (выберите один из двух вариантов):
@@ -171,7 +171,7 @@ DEVICE=auto
 В терминале PowerShell из папки проекта выполните:
 
 ```powershell
-cd literary-style-assistant
+cd SovTehS
 .venv\Scripts\uvicorn.exe src.app:app --host 0.0.0.0 --port 8000
 ```
 
@@ -369,4 +369,5 @@ docker run --rm -p 8000:8000 -e LLM_API_KEY="ваш_ключ" literary-style-ass
 | **Нехватка видеопамяти (`CUDA out of memory`)** | Видеокарта занята тяжёлой игрой, рендером или майнером. | Закройте фоновую нагрузку на GPU либо добавьте `DEVICE=cpu` в `.env` и перезапустите сервер. |
 | **В PowerShell вместо русских букв приходят знаки вопроса `????`** | Старый Windows PowerShell 5.1 по умолчанию отправляет строки в кодировке Windows-1251 вместо UTF-8. | Отправляйте тело через `[System.Text.Encoding]::UTF8.GetBytes($body)` (как показано в **Шаге 4, Способ 2**) или пользуйтесь браузером `http://localhost:8000/docs`. |
 | **`docker build` пишет `cannot find the file specified (dockerDesktopLinuxEngine)`** | На компьютере не запущен Docker Desktop или отключена служба WSL 2 в Windows. | Запустите приложение Docker Desktop либо пользуйтесь прямым запуском через `.venv\Scripts\uvicorn.exe` (работает без Docker и напрямую видит видеокарту). |
+
 

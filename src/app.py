@@ -12,7 +12,7 @@ import joblib
 import torch
 from fastapi import FastAPI, HTTPException, Request
 from fastapi.exceptions import RequestValidationError
-from fastapi.responses import JSONResponse
+from fastapi.responses import JSONResponse, RedirectResponse
 
 from src.classifier import StyleClassifier, load_classifier
 from src.config import get_settings
@@ -74,6 +74,12 @@ app = FastAPI(
     docs_url="/docs",
     redoc_url="/redoc",
 )
+
+
+@app.get("/", include_in_schema=False)
+async def root() -> RedirectResponse:
+    """Перенаправление с корня на интерактивную документацию Swagger UI."""
+    return RedirectResponse(url="/docs")
 
 
 @app.exception_handler(RequestValidationError)
