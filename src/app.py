@@ -33,6 +33,12 @@ logging.basicConfig(
 logger = logging.getLogger(__name__)
 
 
+class UTF8JSONResponse(JSONResponse):
+    """Гарантирует заголовок Content-Type: application/json; charset=utf-8 для Windows PowerShell."""
+
+    media_type = "application/json; charset=utf-8"
+
+
 @asynccontextmanager
 async def lifespan(app: FastAPI) -> AsyncIterator[None]:
     """Единоразовая загрузка моделей в память при старте и освобождение при остановке."""
@@ -71,6 +77,7 @@ app = FastAPI(
     description="Двухстадийный сервис классификации литературного стиля 64 русских авторов и стилизованной генерации текста.",
     version="1.0.0",
     lifespan=lifespan,
+    default_response_class=UTF8JSONResponse,
     docs_url="/docs",
     redoc_url="/redoc",
 )
@@ -92,8 +99,8 @@ async def validation_exception_handler(
             "string_too_short",
             "value_error.missing",
         ):
-            return JSONResponse(status_code=400, content={"detail": "Пустой вопрос"})
-    return JSONResponse(status_code=422, content={"detail": exc.errors()})
+            return UTF8JSONResponse(status_code=400, content={"detail": "Пустой вопрос"})
+    return UTF8JSONResponse(status_code=422, content={"detail": exc.errors()})
 
 
 def _require_classifier(request: Request) -> StyleClassifier:
