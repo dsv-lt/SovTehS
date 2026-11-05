@@ -6,7 +6,12 @@ from pydantic import BaseModel, Field
 
 
 class QueryRequest(BaseModel):
-    question: str = Field(..., min_length=1, description="Фрагмент текста или запрос пользователя")
+    question: str = Field(
+        ...,
+        min_length=1,
+        max_length=15000,
+        description="Фрагмент текста или запрос пользователя (до 15 000 символов)",
+    )
     k: int = Field(default=3, ge=1, le=10, description="Параметр для top-k авторов (опционально)")
     temperature: float = Field(default=0.7, ge=0.0, le=2.0)
 

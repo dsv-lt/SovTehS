@@ -17,6 +17,7 @@ from fastapi.responses import JSONResponse
 from src.classifier import StyleClassifier, load_classifier
 from src.config import get_settings
 from src.llm_client import LLMClient, LLMError, build_system_prompt
+from src.preprocessing import normalize_for_model
 from src.schemas import (
     AuthorScore,
     ClassifyResponse,
@@ -40,20 +41,21 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
 
     vectorizer = None
     if settings.vectorizer_path.exists():
+        logger.info("Loading TF-IDF vectorizer from %s", settings.vectorizer_path)
         vectorizer = joblib.load(settings.vectorizer_path)
-        logger.info("Loaded TF-IDF vectorizer from %s", settings.vectorizer_path)
 
     classifier = load_classifier(settings, vectorizer=vectorizer)
     llm_client = LLMClient(settings)
 
-    app.state.settings = settings
-    app.state.vectorizer = vectorizer
     app.state.classifier = classifier
+    app.state.vectorizer = vectorizer
     app.state.llm_client = llm_client
+
+    logger.info("Application ready to serve requests (classifier=%s)", classifier.name)
     try:
         yield
     finally:
-        logger.info("Shutting down: releasing GPU/RAM resources")
+        logger.info("Shutting down service and cleaning up resources")
         await llm_client.aclose()
         classifier.close()
         app.state.classifier = None
@@ -65,13 +67,12 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
 
 
 app = FastAPI(
-    title="Literary Style Assistant",
-    description=(
-        "Двухстадийный микросервис классификации литературного стиля русских классиков "
-        "(64 автора) и стилизованной генерации текста."
-    ),
+    title="Literary Style Assistant API",
+    description="Двухстадийный сервис классификации литературного стиля 64 русских авторов и стилизованной генерации текста.",
     version="1.0.0",
     lifespan=lifespan,
+    docs_url="/docs",
+    redoc_url="/redoc",
 )
 
 
@@ -81,7 +82,10 @@ async def validation_exception_handler(
 ) -> JSONResponse:
     """Возвращает 400 «Пустой вопрос» при пустой строке question, сохраняя 422 для прочих ошибок."""
     for err in exc.errors():
-        if err.get("loc") == ("body", "question") and err.get("type") == "string_too_short":
+        if err.get("loc") == ("body", "question") and err.get("type") in (
+            "string_too_short",
+            "value_error.missing",
+        ):
             return JSONResponse(status_code=400, content={"detail": "Пустой вопрос"})
     return JSONResponse(status_code=422, content={"detail": exc.errors()})
 
@@ -103,12 +107,17 @@ async def health(request: Request) -> HealthResponse:
 @app.post("/classify", response_model=ClassifyResponse)
 async def classify(payload: QueryRequest, request: Request) -> ClassifyResponse:
     """Локальная классификация стиля автора (стадия 1 без обращения к внешней LLM)."""
-    cleaned = payload.question.strip()
+    # Нормализация удаляет управляющие символы и невидимые пробелы
+    cleaned = normalize_for_model(payload.question)
     if not cleaned:
         raise HTTPException(status_code=400, detail="Пустой вопрос")
 
     classifier = _require_classifier(request)
-    pred = await asyncio.to_thread(classifier.predict, cleaned, payload.k)
+    try:
+        pred = await asyncio.to_thread(classifier.predict, cleaned, payload.k)
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail="Пустой вопрос") from exc
+
     return ClassifyResponse(
         predicted_author=pred.author,
         confidence=round(pred.confidence, 4),
@@ -122,14 +131,18 @@ async def classify(payload: QueryRequest, request: Request) -> ClassifyResponse:
 @app.post("/ask", response_model=QueryResponse)
 async def ask(payload: QueryRequest, request: Request) -> QueryResponse:
     """Полный конвейер: классификация автора (стадия 1) + генерация в его стиле (стадия 2)."""
-    cleaned = payload.question.strip()
+    cleaned = normalize_for_model(payload.question)
     if not cleaned:
         raise HTTPException(status_code=400, detail="Пустой вопрос")
 
     classifier = _require_classifier(request)
     llm_client: LLMClient = request.app.state.llm_client
 
-    pred = await asyncio.to_thread(classifier.predict, cleaned, payload.k)
+    try:
+        pred = await asyncio.to_thread(classifier.predict, cleaned, payload.k)
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail="Пустой вопрос") from exc
+
     system_prompt = build_system_prompt(pred.author)
 
     try:

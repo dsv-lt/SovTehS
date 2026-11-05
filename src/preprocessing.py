@@ -12,13 +12,14 @@ from collections.abc import Iterable
 from pathlib import Path
 
 # Основное регулярное выражение из ТЗ («Напиши текс в стиле автора Платонов С»).
-AUTHOR_RE_PRIMARY = re.compile(r"стиле автора ([^\"]+)")
+# Запрет перевода строк исключает многострочные инъекции команд через имя автора.
+AUTHOR_RE_PRIMARY = re.compile(r"стиле автора ([^\"\r\n]+)")
 # В датасете встречаются и другие шаблоны запроса:
 #   «Придумай отрывок из книги Анна Каренина автора Толстой Л»,
 #   «Напиши текс похожий на текст автора Чехов А».
 # Во всех шаблонах имя автора стоит в конце после слова «автора», поэтому
 # резервное выражение позволяет сохранить 100 % записей и все классы.
-AUTHOR_RE_FALLBACK = re.compile(r"автора\s+([^\"]+?)\s*$")
+AUTHOR_RE_FALLBACK = re.compile(r"автора\s+([^\"\r\n]+?)\s*$")
 
 _LITERAL_ESCAPES = (
     ("\\r\\n", "\n"),
@@ -76,14 +77,24 @@ def chunk_text(text: str, chunk_chars: int = 1000, min_chars: int = 200) -> list
     Разбиение идёт по границам слов; хвостовой фрагмент короче ``min_chars``
     присоединяется к предыдущему (или отбрасывается, если он единственный и
     слишком короткий — кроме случая, когда весь текст короткий).
+    Монолитные токены без пробелов нарезаются принудительно для защиты от DoS.
     """
-    words = normalize_for_model(text).split(" ")
+    normalized = normalize_for_model(text)
+    if not normalized:
+        return []
+
+    words = normalized.split(" ")
     chunks: list[str] = []
     current: list[str] = []
     size = 0
     for word in words:
         if not word:
             continue
+        # Защита от сверхдлинных токенов без пробелов
+        while len(word) > chunk_chars:
+            head, word = word[:chunk_chars], word[chunk_chars:]
+            chunks.append(head)
+
         current.append(word)
         size += len(word) + 1
         if size >= chunk_chars:

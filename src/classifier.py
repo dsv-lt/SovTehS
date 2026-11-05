@@ -1,12 +1,8 @@
-"""Инференс локального классификатора стиля (стадия 1).
+"""Нейросетевые классификаторы стиля (Стадия 1).
 
-Поддерживаются два бэкенда:
-
-* ``baseline`` — посимвольный TF-IDF + PyTorch MLP (``models/baseline_pytorch.pt``);
-* ``lora`` — ruBERT-base + LoRA-адаптер (``models/lora_classifier``).
-
-Длинный текст режется на фрагменты ~1000 символов (как при обучении), итоговое
-распределение по авторам — среднее softmax-вероятностей по фрагментам.
+Модуль предоставляет единый интерфейс ``StyleClassifier`` и две реализации:
+1. ``BaselineClassifier`` — PyTorch MLP поверх char TF-IDF (быстрый CPU/GPU инференс);
+2. ``LoraClassifier`` — трансформер ``ruBert-base`` с дообученным LoRA-адаптером.
 """
 
 from __future__ import annotations
@@ -30,9 +26,9 @@ logger = logging.getLogger(__name__)
 
 
 class TextClassifier(nn.Module):
-    """MLP-классификатор поверх TF-IDF. На выходе — сырые логиты (без Softmax)."""
+    """Полносвязная сеть для классификации стиля по вектору TF-IDF."""
 
-    def __init__(self, in_features: int, num_classes: int):
+    def __init__(self, in_features: int = 50000, num_classes: int = 64):
         super().__init__()
         self.net = nn.Sequential(
             nn.Linear(in_features, 128),
@@ -95,28 +91,33 @@ class StyleClassifier(ABC):
 
 
 class BaselineClassifier(StyleClassifier):
+    """Классификатор на базе char TF-IDF + PyTorch MLP."""
+
     name = "pytorch-mlp-char-tfidf"
 
     def __init__(self, settings: Settings, vectorizer: object | None = None):
         super().__init__(settings)
-        self.vectorizer = (
-            vectorizer if vectorizer is not None else joblib.load(settings.vectorizer_path)
+        if vectorizer is None:
+            vectorizer = joblib.load(settings.vectorizer_path)
+        self.vectorizer = vectorizer
+        ckpt = torch.load(settings.baseline_path, map_location=self.device, weights_only=True)
+        self.classes = list(ckpt.get("classes", []))
+        self.model = TextClassifier(
+            in_features=ckpt.get("in_features", 50000),
+            num_classes=ckpt.get("num_classes", len(self.classes)),
         )
-        ckpt = torch.load(settings.baseline_path, map_location="cpu", weights_only=True)
-        self.model = TextClassifier(ckpt["in_features"], ckpt["num_classes"])
         self.model.load_state_dict(ckpt["model_state_dict"])
         self.model.to(self.device).eval()
-        self.classes = list(ckpt["classes"])
-        logger.info(
-            "Baseline loaded: %d features, %d classes", ckpt["in_features"], len(self.classes)
-        )
 
     def _logits(self, chunks: list[str]) -> torch.Tensor:
-        x = torch.from_numpy(self.vectorizer.transform(chunks).toarray()).to(self.device)
-        return self.model(x)
+        mat = self.vectorizer.transform(chunks)
+        tensor = torch.from_numpy(mat.toarray()).float().to(self.device)
+        return self.model(tensor)
 
 
 class LoraClassifier(StyleClassifier):
+    """Классификатор на базе ruBert-base + LoRA адаптер."""
+
     name = "rubert-base-lora"
 
     def __init__(self, settings: Settings):
@@ -148,13 +149,24 @@ class LoraClassifier(StyleClassifier):
         )
 
     def _logits(self, chunks: list[str]) -> torch.Tensor:
-        enc = self.tokenizer(
-            chunks, truncation=True, max_length=self.max_length, padding=True, return_tensors="pt"
-        ).to(self.device)
-        if self.device.type == "cuda":
-            with torch.autocast("cuda", dtype=torch.bfloat16):
-                return self.model(**enc).logits
-        return self.model(**enc).logits
+        batch_size = 8
+        all_logits: list[torch.Tensor] = []
+        for i in range(0, len(chunks), batch_size):
+            batch = chunks[i : i + batch_size]
+            enc = self.tokenizer(
+                batch,
+                truncation=True,
+                max_length=self.max_length,
+                padding=True,
+                return_tensors="pt",
+            ).to(self.device)
+            if self.device.type == "cuda":
+                with torch.autocast("cuda", dtype=torch.bfloat16):
+                    out = self.model(**enc).logits
+            else:
+                out = self.model(**enc).logits
+            all_logits.append(out)
+        return torch.cat(all_logits, dim=0) if len(all_logits) > 1 else all_logits[0]
 
 
 def load_classifier(settings: Settings, vectorizer: object | None = None) -> StyleClassifier:

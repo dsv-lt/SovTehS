@@ -11,13 +11,22 @@ WORKDIR /app
 COPY requirements.txt .
 RUN pip install --no-cache-dir torch --index-url https://download.pytorch.org/whl/cpu && \
     pip install --no-cache-dir -r requirements.txt && \
-    python -c "from transformers import AutoModel, AutoTokenizer; AutoTokenizer.from_pretrained('ai-forever/ruBert-base'); AutoModel.from_pretrained('ai-forever/ruBert-base')"
+    python -c "from transformers import AutoModelForSequenceClassification, AutoTokenizer; AutoTokenizer.from_pretrained('ai-forever/ruBert-base'); AutoModelForSequenceClassification.from_pretrained('ai-forever/ruBert-base')"
+
+# Создание непривилегированного пользователя для безопасного запуска
+RUN useradd -u 1000 -m appuser && chown -R appuser:appuser /app
 
 # Шаг 2: Копирование исходного кода и обученных артефактов
-COPY src/ ./src/
-COPY models/ ./models/
+COPY --chown=appuser:appuser src/ ./src/
+COPY --chown=appuser:appuser models/ ./models/
+
+USER appuser
 
 EXPOSE 8000
+
+# Зонд жизнеспособности контейнера
+HEALTHCHECK --interval=30s --timeout=5s --start-period=10s --retries=3 \
+    CMD python -c "import urllib.request; urllib.request.urlopen('http://localhost:8000/health')" || exit 1
 
 # Шаг 3: Точка входа
 CMD ["uvicorn", "src.app:app", "--host", "0.0.0.0", "--port", "8000"]
